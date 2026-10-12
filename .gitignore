@@ -5,3 +5,8 @@ __pycache__/
 node_modules/
 dist/
 .pytest_cache/
+
+mise.local.toml
+.mise.local.toml
+*.db
+backend/.venv/

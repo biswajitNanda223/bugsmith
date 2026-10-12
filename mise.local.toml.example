@@ -1,0 +1,21 @@
+# Copy to mise.local.toml (git-ignored) and fill in. Loaded automatically by mise.
+[env]
+GOOGLE_API_KEY = ""                 # free key: aistudio.google.com
+# ANTHROPIC_API_KEY = ""            # with BUGSMITH_MODEL = "anthropic/claude-sonnet-5-5" and `uv sync --extra claude`
+
+# Postgres instead of SQLite
+# BUGSMITH_DATABASE_URL = "postgresql+psycopg://bugsmith:bugsmith@localhost:5432/bugsmith"
+
+# Sentry: Settings > Developer Settings > Internal Integration > webhook; paste its Client Secret here
+SENTRY_WEBHOOK_SECRET = ""
+# BUGSMITH_AUTO_RUN = "1"           # start an investigation automatically when a new crash arrives
+
+# Draft PRs (fine-grained token, contents:write + pull_requests:write on ONE repo)
+GITHUB_TOKEN = ""
+BUGSMITH_GITHUB_REPO = "owner/name"
+# BUGSMITH_AUTO_PR = "1"
+
+# Optional remote MCP servers (otherwise local fixture tools are used)
+# SENTRY_MCP_URL = ""
+# GITHUB_MCP_URL = ""
+# GITHUB_MCP_TOKEN = ""

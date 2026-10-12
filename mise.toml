@@ -1,0 +1,65 @@
+# Shared project config. Personal overrides and secrets go in mise.local.toml (git-ignored).
+min_version = "2024.11.0"
+
+[tools]
+python = "3.13"
+node = "22"
+uv = "latest"
+
+[env]
+BUGSMITH_MODEL = "gemini-2.5-flash"          # gemini-* uses GOOGLE_API_KEY; "anthropic/<model>" needs `uv sync --extra claude`
+BUGSMITH_REPO_PATH = "{{config_root}}"        # checkout the agents may read and the sandbox copies
+BUGSMITH_DATABASE_URL = "sqlite:///{{config_root}}/backend/bugsmith.db"   # postgres: see mise.local.toml.example
+BUGSMITH_SANDBOX = "local"                    # "docker" = run tests in a network-less container
+UV_PROJECT = "{{config_root}}/backend"        # `uv` commands work from anywhere in the repo
+# Secrets (GOOGLE_API_KEY, GITHUB_TOKEN, SENTRY_WEBHOOK_SECRET, ...) -> mise.local.toml
+
+[tasks.setup]
+description = "Install backend (uv) and frontend (npm) dependencies"
+run = ["uv sync", "npm install --prefix frontend"]
+
+[tasks.test]
+description = "Backend tests (fake LLM, no API key needed)"
+dir = "backend"
+run = "uv run pytest -q"
+
+[tasks."dev:api"]
+description = "FastAPI backend on :8000"
+dir = "backend"
+run = "uv run uvicorn app.main:app --reload --port 8000"
+
+[tasks."dev:web"]
+description = "React frontend on :5173"
+dir = "frontend"
+run = "npm run dev"
+
+[tasks.dev]
+description = "Backend + frontend together"
+depends = ["dev:api", "dev:web"]
+
+[tasks."adk:web"]
+description = "ADK developer UI (agents scaffolded with `adk create`)"
+dir = "backend"
+run = "uv run adk web --port 8001"
+
+[tasks."adk:run"]
+description = "Chat with the pipeline in the terminal"
+dir = "backend"
+run = "uv run adk run bugsmith_agent"
+
+[tasks."adk:new"]
+description = "Scaffold another ADK agent app:  mise run adk:new my_agent"
+dir = "backend"
+run = "uv run adk create"
+
+[tasks."db:up"]
+description = "Local Postgres for BUGSMITH_DATABASE_URL=postgresql+psycopg://bugsmith:bugsmith@localhost:5432/bugsmith"
+run = "docker compose -f compose.yaml up -d postgres"
+
+[tasks."sandbox:build"]
+description = "Build the sandbox image used when BUGSMITH_SANDBOX=docker"
+run = "docker build -t bugsmith-sandbox -f sandbox/Dockerfile ."
+
+[tasks.build]
+description = "Production build of the frontend"
+run = "npm run build --prefix frontend"

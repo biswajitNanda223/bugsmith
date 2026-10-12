@@ -1,7 +1,0 @@
-google-adk>=1.39,<2
-fastapi
-uvicorn[standard]
-sse-starlette
-httpx
-pytest
-pytest-asyncio
