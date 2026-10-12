@@ -1,0 +1,6 @@
+[
+  {"ts": "2026-10-12T09:14:02Z", "level": "ERROR", "msg": "TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'", "path": "/cart/c2/total", "cart_id": "c2"},
+  {"ts": "2026-10-12T09:14:09Z", "level": "ERROR", "msg": "TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'", "path": "/cart/c2/total", "cart_id": "c2"},
+  {"ts": "2026-10-12T09:15:00Z", "level": "INFO", "msg": "GET /cart/c1/total 200", "path": "/cart/c1/total", "cart_id": "c1"},
+  {"ts": "2026-10-12T09:15:40Z", "level": "WARN", "msg": "cart c2 contains legacy item without discount", "cart_id": "c2"}
+]

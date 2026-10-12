@@ -16,7 +16,9 @@ async def test_pipeline_produces_rca():
     done = store.runs[run["id"]]
     assert done["status"] == "done", done["error"]
     assert done["rca"]["faulty_file"] == "demo-app/app.py"
-    assert any(e["type"] == "tool_call" and e["name"] == "get_crash_report" for e in done["events"])
+    agents = {e["agent"] for e in done["events"] if e["type"] == "tool_call"}
+    assert agents == {"CrashAgent", "CodeAgent", "LogsAgent", "TraceAgent", "ChangeAgent"}
+    assert set(done["rca"]["confidence_breakdown"]["agents"]) == agents | {"RcaWriter"}
     assert store.incidents[inc["id"]]["status"] == "rca_ready"
 
 
@@ -51,17 +53,17 @@ async def test_confidence_and_memory_loop():
 
     rid1, r1 = await go()
     b1 = r1["rca"]["confidence_breakdown"]
-    assert b1["agents"] == {"Investigator": 0.8, "RcaWriter": 0.9}
-    assert b1["final"] == 0.8 and b1["similar_incidents"] == 0  # min(0.8,0.9) * 1 evidence * neutral reliability
+    assert b1["agents"]["TraceAgent"] == 0.6 and b1["agents"]["RcaWriter"] == 0.9
+    assert b1["final"] == 0.74 and b1["similar_incidents"] == 0  # mean(.85,.8,.7,.6,.75) * full evidence * neutral reliability
     assert any(e["type"] == "confidence" for e in r1["events"])
 
-    memory.record_feedback(rid1, accepted=True, agents=["Investigator", "RcaWriter"])
-    assert memory.reliability("Investigator") > 0.5
+    memory.record_feedback(rid1, accepted=True, agents=list(b1["agents"]))
+    assert memory.reliability("CodeAgent") > 0.5
 
     _, r2 = await go()
     b2 = r2["rca"]["confidence_breakdown"]
     assert b2["similar_incidents"] == 1 and b2["memory_delta"] > 0 and b2["final"] > b1["final"]
 
-    memory.record_feedback(r2["id"], accepted=False, agents=["Investigator", "RcaWriter"])
+    memory.record_feedback(r2["id"], accepted=False, agents=list(b1["agents"]))
     _, r3 = await go()
     assert r3["rca"]["confidence_breakdown"]["memory_delta"] < b2["memory_delta"]

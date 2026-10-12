@@ -1,0 +1,6 @@
+[
+  {"trace_id": "t-9f2", "route": "GET /cart/c2/total", "status": 500, "spans": [
+    {"name": "http.request", "ms": 4}, {"name": "cart_total", "ms": 1, "error": "TypeError"}]},
+  {"trace_id": "t-1a7", "route": "GET /cart/c1/total", "status": 200, "spans": [
+    {"name": "http.request", "ms": 3}, {"name": "cart_total", "ms": 1}]}
+]

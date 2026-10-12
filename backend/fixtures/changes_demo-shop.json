@@ -1,0 +1,5 @@
+{
+  "deploys": [{"release": "2026.10.11-1", "deployed_at": "2026-10-11T18:00:00Z", "commit": "a1b2c3d"}],
+  "commits": [{"sha": "a1b2c3d", "author": "dev", "message": "Apply per-item discounts in cart_total", "files": ["demo-app/app.py"]}],
+  "feature_flags": [{"key": "item_discounts", "enabled": true, "changed_at": "2026-10-11T17:55:00Z"}]
+}

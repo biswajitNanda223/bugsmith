@@ -3,7 +3,7 @@
 Investigator (has tools, free-form findings) -> RcaWriter (structured RCA).
 Split in two because ADK models with an output_schema cannot call tools.
 """
-from google.adk.agents import LlmAgent, SequentialAgent
+from google.adk.agents import LlmAgent, ParallelAgent, SequentialAgent
 from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 from pydantic import BaseModel, Field
 
@@ -24,13 +24,13 @@ class RCA(BaseModel):
     suggested_fix: str
 
 
-def submit_findings(summary: str, evidence: list[str], confidence: float, tool_context: ToolContext) -> dict:
+def submit_report(summary: str, evidence: list[str], confidence: float, tool_context: ToolContext) -> dict:
     """Record your verified findings. Call this exactly once, last.
 
-    confidence is 0-1: how sure you are the findings explain the crash. Use <0.5 if you
-    could not read the faulty code or the stack trace and code disagree.
+    confidence is 0-1: how sure you are that your findings explain the crash. Use <0.4 if you
+    found no relevant data, 0.4-0.7 if the evidence is circumstantial, >0.8 only if directly verified.
     """
-    tool_context.state["investigator_report"] = {
+    tool_context.state[f"report_{tool_context.agent_name}"] = {
         "summary": summary, "evidence": evidence, "confidence": max(0.0, min(1.0, float(confidence)))}
     return {"recorded": True}
 
@@ -50,44 +50,51 @@ def _model():
     return config.MODEL
 
 
-def _tools() -> list:
-    tools: list = []
-    if config.SENTRY_MCP_URL:
-        tools.append(McpToolset(connection_params=StreamableHTTPConnectionParams(url=config.SENTRY_MCP_URL)))
-    else:
-        tools.append(local.get_crash_report)
-    if config.GITHUB_MCP_URL:
-        headers = {"Authorization": f"Bearer {config.GITHUB_MCP_TOKEN}"} if config.GITHUB_MCP_TOKEN else {}
-        tools.append(McpToolset(connection_params=StreamableHTTPConnectionParams(url=config.GITHUB_MCP_URL, headers=headers)))
-    else:
-        tools += [local.search_code, local.read_file]
-    return tools + [recall_similar_incidents, submit_findings]
+def _mcp(url: str, token: str = ""):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return McpToolset(connection_params=StreamableHTTPConnectionParams(url=url, headers=headers))
+
+
+INVESTIGATORS = {
+    # name: (what it does, tools)
+    "CrashAgent": ("Fetch the crash report for issue {issue_id}; call recall_similar_incidents with its title "
+                   "(past results are hints to verify, never proof). Report stack trace, impact and trigger.",
+                   lambda: [_mcp(config.SENTRY_MCP_URL)] if config.SENTRY_MCP_URL else [local.get_crash_report],
+                   [recall_similar_incidents]),
+    "CodeAgent": ("Find the faulty code for crash {issue_id}: search the repo for the function named in the stack "
+                  "trace (get it from the crash report if needed) and read the surrounding lines. Report the exact faulty lines and why.",
+                  lambda: [_mcp(config.GITHUB_MCP_URL, config.GITHUB_MCP_TOKEN)] if config.GITHUB_MCP_URL else [local.search_code, local.read_file],
+                  [local.get_crash_report]),
+    "LogsAgent": ("Query logs for the service of crash {issue_id} (service name is in the crash report). Report error "
+                  "frequency, affected inputs (ids, routes) and anything abnormal before the crash.",
+                  lambda: [local.query_logs], [local.get_crash_report]),
+    "TraceAgent": ("Fetch traces for the service of crash {issue_id}. Report which span failed and whether failing and "
+                   "succeeding requests differ.", lambda: [local.get_traces], [local.get_crash_report]),
+    "ChangeAgent": ("List recent deploys, commits and feature-flag changes for the service of crash {issue_id}. Report "
+                    "which change most plausibly introduced the bug, with timing relative to first_seen.",
+                    lambda: [local.recent_changes], [local.get_crash_report]),
+}
 
 
 def build_rca_pipeline(model=None) -> SequentialAgent:
     model = model or _model()
-    investigator = LlmAgent(
-        name="Investigator",
-        model=model,
-        instruction=(
-            "You are a production-debugging agent. Crash issue id: {issue_id}.\n"
-            "1. Fetch the crash report. 2. Call recall_similar_incidents with its title; treat past "
-            "results as hints to verify, never as proof (they may have been rejected). 3. Locate the faulty "
-            "code with search/read tools and read the surrounding lines. 4. Call submit_findings once with "
-            "only facts you verified in tool output, and an honest confidence."
-        ),
-        tools=_tools(),
-        output_key="findings",
-    )
+    agents = []
+    for name, (job, tools, extra) in INVESTIGATORS.items():
+        agents.append(LlmAgent(
+            name=name, model=model,
+            instruction=(f"ROLE:{name}. You are one of several parallel production-debugging investigators.\n{job}\n"
+                         "Rely only on tool output. If a tool returns nothing useful, say so and give a LOW confidence. "
+                         "Finish by calling submit_report once."),
+            tools=[*tools(), *[t for t in extra if t not in tools()], submit_report],
+            output_key=f"notes_{name}",
+        ))
+    investigators = ParallelAgent(name="Investigators", sub_agents=agents)
+    reports = "\n".join(f"{n}: {{report_{n}?}}" for n in INVESTIGATORS)
     writer = LlmAgent(
-        name="RcaWriter",
-        model=model,
-        instruction=(
-            "Produce the root-cause analysis from the investigator's report:\n{investigator_report}\n"
-            "and its notes:\n{findings}\n"
-            "Be honest about confidence; list missing information if the evidence is thin."
-        ),
-        output_schema=RCA,
-        output_key="rca",
+        name="RcaWriter", model=model,
+        instruction=("Produce the root-cause analysis from the investigators' reports. Reports may disagree or be missing; "
+                     "weigh them by their stated confidence and evidence, and mention conflicts.\n" + reports +
+                     "\nBe honest about your own confidence; list missing information if the evidence is thin."),
+        output_schema=RCA, output_key="rca",
     )
-    return SequentialAgent(name="RcaPipeline", sub_agents=[investigator, writer])
+    return SequentialAgent(name="RcaPipeline", sub_agents=[investigators, writer])

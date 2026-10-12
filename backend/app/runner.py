@@ -37,7 +37,7 @@ async def run_incident(run_id: str, issue_id: str, agent=None) -> None:
             final = json.loads(final)
         if final:
             final["confidence_breakdown"] = confidence.aggregate(
-                state.get("investigator_report") or {}, final, state.get("similar_past") or [])
+                {k[len("report_"):]: v for k, v in state.items() if k.startswith("report_")}, final, state.get("similar_past") or [])
             await store.add_event(run_id, {"agent": "Confidence", "type": "confidence", **final["confidence_breakdown"]})
             run = store.runs[run_id]
             memory.save_run(run_id, issue_id, store.incidents[run["incident_id"]]["title"], final,

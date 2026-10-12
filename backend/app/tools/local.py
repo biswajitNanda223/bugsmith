@@ -54,3 +54,32 @@ def read_file(path: str, start_line: int = 1, end_line: int = 200) -> dict:
     end_line = min(end_line, start_line + 399)
     chunk = [f"{i}: {l}" for i, l in enumerate(lines[start_line - 1 : end_line], start_line)]
     return {"path": path, "total_lines": len(lines), "content": "\n".join(chunk)}
+
+
+def _fixture(name: str, service: str):
+    path = config.FIXTURES_DIR / f"{name}_{service}.json"
+    if path.parent != config.FIXTURES_DIR or not path.is_file():
+        return None
+    return json.loads(path.read_text())
+
+
+def query_logs(service: str, contains: str = "") -> dict:
+    """Search recent application logs for a service; optional case-insensitive substring filter. Max 50 lines."""
+    rows = _fixture("logs", service)
+    if rows is None:
+        return {"error": f"no logs for service {service}"}
+    return {"lines": [r for r in rows if contains.lower() in json.dumps(r).lower()][:50]}
+
+
+def get_traces(service: str, route: str = "") -> dict:
+    """Fetch distributed traces for a service, optionally filtered by route substring. Shows which span failed."""
+    rows = _fixture("traces", service)
+    if rows is None:
+        return {"error": f"no traces for service {service}"}
+    return {"traces": [r for r in rows if route.lower() in r["route"].lower()][:20]}
+
+
+def recent_changes(service: str) -> dict:
+    """List recent deploys, commits and feature-flag changes for a service."""
+    data = _fixture("changes", service)
+    return data if data is not None else {"error": f"no change history for service {service}"}

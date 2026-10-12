@@ -69,7 +69,10 @@ def feedback(run_id: str, body: FeedbackIn):
     """Engineer verdict on the RCA. Updates long-term memory and per-agent reliability."""
     if run_id not in store.runs:
         raise HTTPException(404, "run not found")
-    if not memory.record_feedback(run_id, body.accepted, ["Investigator", "RcaWriter"]):
+    rca = store.runs[run_id]["rca"]
+    if not rca:
+        raise HTTPException(409, "run has no saved RCA")
+    if not memory.record_feedback(run_id, body.accepted, list(rca["confidence_breakdown"]["agents"])):
         raise HTTPException(409, "run has no saved RCA")
     store.runs[run_id]["feedback"] = "accepted" if body.accepted else "rejected"
     return {"ok": True}
