@@ -76,7 +76,8 @@ INVESTIGATORS = {
 }
 
 
-def build_rca_pipeline(model=None) -> SequentialAgent:
+def build_investigation(model=None) -> list:
+    """[Investigators (parallel), RcaWriter] - fresh agent instances (an ADK agent can have only one parent)."""
     model = model or _model()
     agents = []
     for name, (job, tools, extra) in INVESTIGATORS.items():
@@ -97,4 +98,8 @@ def build_rca_pipeline(model=None) -> SequentialAgent:
                      "\nBe honest about your own confidence; list missing information if the evidence is thin."),
         output_schema=RCA, output_key="rca",
     )
-    return SequentialAgent(name="RcaPipeline", sub_agents=[investigators, writer])
+    return [investigators, writer]
+
+
+def build_rca_pipeline(model=None) -> SequentialAgent:
+    return SequentialAgent(name="RcaPipeline", sub_agents=build_investigation(model))

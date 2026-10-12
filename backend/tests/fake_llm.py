@@ -5,6 +5,8 @@ from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 
+from tests.patches import GOOD_PATCH, NOOP_PATCH, REPRO
+
 RCA_JSON = {
     "summary": "cart_total subtracts a None discount",
     "faulty_file": "demo-app/app.py", "faulty_lines": "19",
@@ -19,8 +21,10 @@ CONFIDENCE = {"CrashAgent": 0.85, "CodeAgent": 0.8, "LogsAgent": 0.7, "TraceAgen
 
 
 def _report(role, summary):
-    return ("submit_report", {"summary": summary, "evidence": [f"{role} evidence 1", f"{role} evidence 2"], "confidence": CONFIDENCE[role]})
+    return ("submit_report", {"summary": summary, "evidence": [f"{role} evidence 1", f"{role} evidence 2"], "confidence": None})  # filled at call time so tests can patch CONFIDENCE
 
+
+FIX_FAILS_FIRST = 1  # first N fix attempts are a no-op patch, to exercise the retry loop
 
 SCRIPTS = {
     "CrashAgent": [("recall_similar_incidents", {"title": "TypeError: NoneType in cart_total"}),
@@ -44,11 +48,29 @@ class FakeLlm(BaseLlm):
         if llm_request.config.response_schema is not None:
             yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(RCA_JSON))]))
         else:
+            if "ROLE:FixerAgent" in str(llm_request.config.system_instruction):
+                resp = [p.function_response.name for c in contents for p in (c.parts or []) if p.function_response]
+                if contents[-1].parts and any(p.function_response and p.function_response.name == "submit_fix" for p in contents[-1].parts):
+                    call = None
+                elif "read_file" not in resp:
+                    call = ("read_file", {"path": "demo-app/app.py", "start_line": 1, "end_line": 30})
+                else:
+                    attempt = resp.count("submit_fix")
+                    call = ("submit_fix", {"patch": NOOP_PATCH if attempt < FIX_FAILS_FIRST else GOOD_PATCH, "repro_test": REPRO,
+                                           "explanation": "Treat missing discount as 0", "workdir": "demo-app"})
+                if call is None:
+                    part = types.Part(text="submitted")
+                else:
+                    part = types.Part(function_call=types.FunctionCall(name=call[0], args=call[1]))
+                yield LlmResponse(content=types.Content(role="model", parts=[part]))
+                return
             role = next((r for r in SCRIPTS if f"ROLE:{r}" in str(llm_request.config.system_instruction)), None)
             done = sum(1 for c in contents for p in (c.parts or []) if p.function_response)
             script = SCRIPTS[role]
             if done < len(script):
                 name, args = script[done]
+                if name == "submit_report":
+                    args = {**args, "confidence": CONFIDENCE[role]}
                 yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(name=name, args=args))]))
             else:
                 yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=f"{role} done.")]))

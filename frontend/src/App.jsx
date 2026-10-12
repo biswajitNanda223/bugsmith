@@ -29,6 +29,38 @@ function Feedback({ run }) {
   return <div className="row"><button onClick={() => send(true)}>👍 Correct</button><button className="alt" onClick={() => send(false)}>👎 Wrong</button></div>;
 }
 
+function Fix({ result, run }) {
+  const [pr, setPr] = useState(result.pr);
+  const [err, setErr] = useState("");
+  const open = async () => {
+    setErr("");
+    const r = await fetch(`/api/runs/${run}/pr`, { method: "POST" });
+    const body = await r.json();
+    r.ok ? setPr(body) : setErr(body.detail);
+  };
+  if (result.fix_skipped) return <section className="card muted">No fix attempted: {result.fix_skipped}.</section>;
+  if (!result.fix) return null;
+  const v = result.validation;
+  return (
+    <section className="card">
+      <h3>Proposed fix <span className={`badge ${v?.passed ? "rca_ready" : "failed"}`}>{v?.passed ? "validated" : "not validated"}</span></h3>
+      <p>{result.fix.explanation} <span className="muted">(attempt {result.fix.attempt})</span></p>
+      <pre className="diff">{result.fix.patch}</pre>
+      <h4>Sandbox checks</h4>
+      <ul>{v?.steps.map((s) => <li key={s.name}>{s.ok ? "✅" : "❌"} <code>{s.name}</code></li>)}</ul>
+      {result.pr_preview && (
+        <>
+          <h4>Draft pull request</h4>
+          <p><strong>{result.pr_preview.title}</strong> <span className="muted">· branch {result.pr_preview.branch}</span></p>
+          <details><summary>PR description</summary><pre className="diff">{result.pr_preview.body}</pre></details>
+          {pr ? <p>Opened: <a href={pr.url} target="_blank" rel="noreferrer">{pr.url}</a></p> : <button onClick={open}>Open draft PR</button>}
+          {err && <p className="err">{err}</p>}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Rca({ rca, run }) {
   return (
     <section className="card">
@@ -71,6 +103,7 @@ function RunView({ run }) {
               <span className="agent">{s.agent}</span>{" "}
               {s.type === "tool_call" && <>called <code>{s.name}</code> <span className="muted">{JSON.stringify(s.args)}</span></>}
               {s.type === "tool_result" && <>got result from <code>{s.name}</code></>}
+              {s.type === "validation" && <>validation attempt {s.attempt}: {s.passed ? "✅ passed" : `❌ failed at ${s.steps.find((x) => !x.ok)?.name}`}</>}
               {s.type === "confidence" && <>final confidence <strong>{pct(s.final)}</strong></>}
               {s.type === "message" && <span className="muted">{s.text.slice(0, 200)}</span>}
             </li>
@@ -80,6 +113,7 @@ function RunView({ run }) {
       </section>
       {result?.error && <section className="card error">Run failed: {result.error}</section>}
       {result?.rca && <Rca rca={result.rca} run={run} />}
+      {result?.rca && <Fix result={result} run={run} />}
     </div>
   );
 }

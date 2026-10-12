@@ -19,3 +19,5 @@ code { background:var(--bg); padding:1px 5px; border-radius:4px; }
 .small { font-size:13px; } .alt { background:var(--muted); }
 .bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:4px 0; max-width:320px; }
 .bar > div { height:100%; background:var(--accent); }
+.diff { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; overflow-x:auto; font-size:13px; white-space:pre-wrap; }
+.err { color:var(--err); }

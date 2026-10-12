@@ -3,13 +3,16 @@
 AI debugging agent: production crash → root cause → validated fix → PR. Built with Google ADK, FastAPI and React.
 See [docs/PLAN.md](docs/PLAN.md) for the full architecture and milestones.
 
-**Status:** Milestones 0–4 done.
+**Status:** Milestones 0–6 done.
 - Five parallel investigators (crash, code, logs, traces, changes), each reporting its own confidence → RCA writer.
 - Final confidence is computed in code (`app/confidence.py`) from agent scores, evidence, each agent's track record and similar past incidents; it decides `auto_pr_allowed` / `rca_only` / `needs_human`.
 - Long-term memory + 👍/👎 feedback in SQLite (`app/memory.py`).
 - Patch-validation sandbox (`app/sandbox.py`, also an MCP server): repro test must fail before the patch and pass after, then existing tests run.
 
-Next: fix loop (Fixer/Validator/Critic), PR creation, Sentry webhook. The sandbox uses a temp copy + scrubbed env but not container isolation yet.
+- Fix loop (`app/agents/fix.py`): runs only if confidence ≥ 0.75. FixerAgent (LLM) → Validator (sandbox, deterministic) → Critic (deterministic: validated, touches the faulty file, ≤ 30 changed lines); up to 3 attempts.
+- Draft PR (`app/pr.py`): the UI shows the patch, sandbox checks and PR preview; **Open draft PR** pushes a `bugsmith/<issue>` branch (never main) and opens a draft. Needs `GITHUB_TOKEN` and `BUGSMITH_GITHUB_REPO` on the server. `BUGSMITH_AUTO_PR=1` opens it without a click (off by default).
+
+Next: Sentry webhook, Postgres, container isolation for the sandbox. The sandbox uses a temp copy + scrubbed env but not container isolation yet.
 
 ## Run it
 ```bash

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app import memory
+from app import config, memory, pr
 from app.runner import run_incident
 from app.store import store
 
@@ -78,6 +78,27 @@ def feedback(run_id: str, body: FeedbackIn):
     return {"ok": True}
 
 
+@app.post("/api/runs/{run_id}/pr")
+async def open_pr(run_id: str):
+    """Human-approved: push a branch and open a DRAFT PR for a validated fix."""
+    run = store.runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "run not found")
+    if not run.get("pr_preview"):
+        raise HTTPException(409, "no validated fix to open a PR for")
+    if run.get("pr"):
+        return run["pr"]
+    if not (config.GITHUB_TOKEN and config.GITHUB_REPO):
+        raise HTTPException(400, "set GITHUB_TOKEN and BUGSMITH_GITHUB_REPO on the server to open real PRs")
+    try:
+        run["pr"] = await asyncio.to_thread(pr.open_draft_pr, run["pr_preview"], run["fix"], repo=config.GITHUB_REPO,
+                                            base=config.GITHUB_BASE, token=config.GITHUB_TOKEN)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    store.incidents[run["incident_id"]]["status"] = "pr_open"
+    return run["pr"]
+
+
 @app.get("/api/runs/{run_id}/stream")
 async def stream_run(run_id: str):
     if run_id not in store.runs:
@@ -91,7 +112,7 @@ async def stream_run(run_id: str):
                 yield {"event": "step", "data": json.dumps(ev)}
             sent = len(run["events"])
             if run["status"] != "running":
-                yield {"event": "done", "data": json.dumps({"status": run["status"], "rca": run["rca"], "error": run["error"]})}
+                yield {"event": "done", "data": json.dumps({"status": run["status"], "rca": run["rca"], "error": run["error"], "fix": run.get("fix"), "validation": run.get("validation"), "fix_skipped": run.get("fix_skipped"), "pr_preview": run.get("pr_preview"), "pr": run.get("pr")})}
                 return
             await store.wait_for_change()
 
