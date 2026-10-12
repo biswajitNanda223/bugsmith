@@ -156,7 +156,8 @@ export default function App() {
           {incidents.length === 0 && <p className="muted">None yet.</p>}
           {incidents.map((i) => (
             <div key={i.id} className={`incident ${selected === i.id ? "sel" : ""}`}>
-              <div><strong>{i.issue_id}</strong> <span className={`badge ${i.status}`}>{i.status}</span></div>
+              <div><strong>{i.issue_id}</strong> <span className={`badge ${i.status}`}>{i.status}</span>{" "}
+                <span className="muted small">{i.source} · seen {i.occurrences}×</span></div>
               <div className="muted">{i.title}</div>
               <button onClick={() => investigate(i.id)}>Investigate</button>
             </div>

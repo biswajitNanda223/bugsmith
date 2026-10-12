@@ -1,41 +1,36 @@
 # BugSmith
 
-AI debugging agent: production crash → root cause → validated fix → PR. Built with Google ADK, FastAPI and React.
-See [docs/PLAN.md](docs/PLAN.md) for the full architecture and milestones.
+AI debugging agent: production crash → root cause → validated fix → draft PR. Google ADK + FastAPI + React.
+Architecture and milestones: [docs/PLAN.md](docs/PLAN.md).
 
-**Status:** Milestones 0–6 done.
-- Five parallel investigators (crash, code, logs, traces, changes), each reporting its own confidence → RCA writer.
-- Final confidence is computed in code (`app/confidence.py`) from agent scores, evidence, each agent's track record and similar past incidents; it decides `auto_pr_allowed` / `rca_only` / `needs_human`.
-- Long-term memory + 👍/👎 feedback in SQLite (`app/memory.py`).
-- Patch-validation sandbox (`app/sandbox.py`, also an MCP server): repro test must fail before the patch and pass after, then existing tests run.
+## Quick start (mise)
+Tools, env vars and tasks live in [`mise.toml`](mise.toml); Python deps in [`backend/pyproject.toml`](backend/pyproject.toml) (uv). No `requirements.txt`.
 
-- Fix loop (`app/agents/fix.py`): runs only if confidence ≥ 0.75. FixerAgent (LLM) → Validator (sandbox, deterministic) → Critic (deterministic: validated, touches the faulty file, ≤ 30 changed lines); up to 3 attempts.
-- Draft PR (`app/pr.py`): the UI shows the patch, sandbox checks and PR preview; **Open draft PR** pushes a `bugsmith/<issue>` branch (never main) and opens a draft. Needs `GITHUB_TOKEN` and `BUGSMITH_GITHUB_REPO` on the server. `BUGSMITH_AUTO_PR=1` opens it without a click (off by default).
-
-Next: Sentry webhook, Postgres, container isolation for the sandbox. The sandbox uses a temp copy + scrubbed env but not container isolation yet.
-
-## Run it
 ```bash
-# backend
-cd backend && python -m venv ../.venv && . ../.venv/bin/activate && pip install -r requirements.txt
-cp .env.example .env   # add GOOGLE_API_KEY (free at aistudio.google.com)
-set -a; . ./.env; set +a
-uvicorn app.main:app --reload            # http://localhost:8000
-
-# frontend (second terminal)
-cd frontend && npm install && npm run dev  # http://localhost:5173
+mise install                              # python 3.13, node 22, uv
+cp mise.local.toml.example mise.local.toml   # git-ignored: put GOOGLE_API_KEY etc. here
+mise run setup                            # uv sync + npm install
+mise run dev                              # API :8000 + UI :5173
+mise run test                             # no API key needed (fake LLM)
 ```
-Click **Add incident** (defaults to the seeded `DEMO-1` crash), then **Investigate**.
+Open http://localhost:5173, **Add incident** (`DEMO-1`), **Investigate**.
 
-## Test (no API key needed — uses a fake LLM)
-```bash
-cd backend && python -m pytest -q
-```
+| Task | What |
+|---|---|
+| `mise run adk:web` / `adk:run` | ADK dev UI / terminal chat on `bugsmith_agent` (scaffolded with `adk create`) |
+| `mise run adk:new <name>` | scaffold another ADK agent app with `adk create` |
+| `mise run db:up` | local Postgres (`compose.yaml`) |
+| `mise run sandbox:build` | build the sandbox image for `BUGSMITH_SANDBOX=docker` |
 
-## Layout
-- `demo-app/` — sample service with a seeded bug (`cart_total` crashes on `discount=None`)
-- `backend/app/agents/rca.py` — parallel investigators → RcaWriter (structured RCA)
-- `backend/app/sandbox.py`, `backend/app/mcp_servers/sandbox_server.py` — patch validation + its MCP server
-- `backend/app/tools/local.py` — fixture crash report + read-only code search, used until Sentry/GitHub MCP URLs are set
-- `backend/app/main.py` — incidents/runs API and SSE stream
-- `frontend/` — incident list, live timeline, RCA view
+## What's built
+- **Investigate**: five parallel agents (crash, code, logs, traces, changes), each reporting its own confidence → RCA writer.
+- **Confidence**: final score computed in code (`app/confidence.py`) from agent scores, evidence, each agent's track record and similar past incidents. ≥ 0.75 allows an auto-fix, ≥ 0.4 RCA only, otherwise needs a human.
+- **Memory**: past RCAs, outcomes and per-agent reliability, updated by 👍/👎 (`app/memory.py`).
+- **Fix loop** (`app/agents/fix.py`): Fixer (LLM) → Validator (sandbox) → Critic, up to 3 attempts; the repro test must fail before the patch and pass after.
+- **Draft PR** (`app/pr.py`): preview in the UI; **Open draft PR** pushes `bugsmith/<issue>` (never main). `BUGSMITH_AUTO_PR=1` skips the click.
+- **Sentry webhook** (`POST /webhooks/sentry`): HMAC-verified (rejects everything if `SENTRY_WEBHOOK_SECRET` is unset), idempotent per `Request-ID`, repeat crashes bump an occurrence counter instead of creating duplicates. With `BUGSMITH_AUTO_RUN=1` it starts an investigation unless one is running or the crash was investigated within `BUGSMITH_RUN_COOLDOWN_MIN` (60), and stops at `BUGSMITH_MAX_RUNS_PER_HOUR` (10).
+- **Storage**: SQLAlchemy, SQLite by default, Postgres via `BUGSMITH_DATABASE_URL=postgresql+psycopg://...`. Tables are created on startup (add Alembic before changing the schema on a live DB). Test suite on Postgres: `BUGSMITH_TEST_DATABASE_URL=postgresql+psycopg://... mise run test` (use a throwaway DB; tables are dropped between tests).
+- **Sandbox** (`app/sandbox.py`, also an MCP server): `local` copies the repo and scrubs the environment; `docker` runs tests with no network, read-only mounts, dropped capabilities, non-root, memory/CPU/pid limits.
+
+## Not done yet
+Background worker process + queue (runs execute inside the API process), Alembic migrations, auth on the API/UI, the Docker mode has only been verified at the command level (no Docker daemon was available while building), real Sentry/GitHub MCP servers are wired but untested, and the agents have only run against a scripted fake model, not a live one.

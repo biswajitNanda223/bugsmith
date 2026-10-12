@@ -58,7 +58,7 @@ run = "docker compose -f compose.yaml up -d postgres"
 
 [tasks."sandbox:build"]
 description = "Build the sandbox image used when BUGSMITH_SANDBOX=docker"
-run = "docker build -t bugsmith-sandbox -f sandbox/Dockerfile ."
+run = "docker build -t bugsmith-sandbox sandbox"
 
 [tasks.build]
 description = "Production build of the frontend"

@@ -11,6 +11,10 @@ _SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__", "dist"}
 
 def get_crash_report(issue_id: str) -> dict:
     """Fetch a crash report (stack trace, release, impact) by issue id, e.g. DEMO-1."""
+    from app.store import store  # reports received by the webhook take precedence over sample fixtures
+
+    if (report := store.get_crash_report(issue_id)) is not None:
+        return report
     path = config.FIXTURES_DIR / f"sentry_issue_{issue_id}.json"
     if not path.is_file() or path.parent != config.FIXTURES_DIR:
         return {"error": f"issue {issue_id} not found"}

@@ -15,7 +15,7 @@ async def run_pipeline():
     inc = store.create_incident(f"FIX-{uuid.uuid4().hex[:6]}", "TypeError: NoneType in cart_total", "demo-shop")
     run = store.create_run(inc["id"])
     await runner.run_incident(run["id"], "DEMO-1", agent=build_full_pipeline(model=FakeLlm()))
-    return inc, store.runs[run["id"]]
+    return inc, store.get_run(run["id"])
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ async def test_loop_gives_up_after_max_attempts(confident, monkeypatch):
     monkeypatch.setattr(fake_llm, "FIX_FAILS_FIRST", 99)
     _, run = await run_pipeline()
     assert len([e for e in run["events"] if e["type"] == "validation"]) == 3
-    assert not run["validation"]["passed"] and "pr_preview" not in run
+    assert not run["validation"]["passed"] and run["pr_preview"] is None
 
 
 @pytest.mark.asyncio

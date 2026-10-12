@@ -7,15 +7,19 @@ reviewer would:
   3. the reproduction test must PASS after the patch,
   4. the existing test suite must still pass (no regressions).
 
-Isolation level: separate temp copy, scrubbed environment (no API keys), timeouts and
-output caps. It does NOT block network or syscalls. Anything untrusted should run in a
-container; `docker_wrap` is the single place to add that (see docs/PLAN.md).
+Isolation:
+  * BUGSMITH_SANDBOX=local (default): separate temp copy, scrubbed environment (no API keys), timeouts, output caps.
+    Does NOT block network or filesystem access outside the copy - fine for your own repos, not for untrusted code.
+  * BUGSMITH_SANDBOX=docker: every test run executes in a throwaway container: no network, read-only root and
+    source mount, all capabilities dropped, non-root, memory/CPU/pid limits. `git apply` still runs on the host
+    (it only edits files in the temp copy and paths are validated first).
 """
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -47,17 +51,32 @@ def _env(workdir: Path) -> dict:
     return {**keep, "PYTHONPATH": str(workdir), "PYTHONDONTWRITEBYTECODE": "1", "CI": "1"}
 
 
-def docker_wrap(cmd: list[str], workdir: Path) -> list[str]:
-    """Hook for container isolation, e.g. ['docker','run','--rm','--network=none','-v',...]. Identity for now."""
-    return cmd
+def docker_command(cmd: list[str], root: Path, workdir: Path, name: str, image: str) -> list[str]:
+    """`docker run` argv that runs `cmd` (python path rewritten) against the read-only copy at `root`."""
+    inner = ["python" if c == sys.executable else c for c in cmd]
+    wd = "/work/" + str(workdir.relative_to(root)) if workdir != root else "/work"
+    return ["docker", "run", "--rm", "--name", name,
+            "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,size=64m,noexec",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "--pids-limit", "256", "--memory", "512m", "--cpus", "1", "--user", "10001:10001",
+            "-v", f"{root}:/work:ro", "-w", wd,
+            "-e", f"PYTHONPATH={wd}", "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "CI=1",
+            image, *inner]
 
 
-def _run(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
+def _run(cmd: list[str], cwd: Path, timeout: int, root: Path | None = None) -> tuple[int, str]:
+    """Run a command. With `root` (the repo copy) and BUGSMITH_SANDBOX=docker it runs inside a container."""
+    if root is not None and config.SANDBOX_MODE == "docker":
+        name = f"bugsmith-{uuid.uuid4().hex[:12]}"
+        argv, env = docker_command(cmd, root, cwd, name, config.SANDBOX_IMAGE), None
+    else:
+        name, argv, env = None, cmd, _env(cwd)
     try:
-        p = subprocess.run(docker_wrap(cmd, cwd), cwd=cwd, env=_env(cwd), capture_output=True, text=True, timeout=timeout)
-        out = (p.stdout + p.stderr)[-_MAX_OUT:]
-        return p.returncode, out
+        p = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout + p.stderr)[-_MAX_OUT:]
     except subprocess.TimeoutExpired:
+        if name:  # killing the docker client does not stop the container
+            subprocess.run(["docker", "kill", name], capture_output=True)
         return 124, f"timed out after {timeout}s"
 
 
@@ -85,6 +104,8 @@ def validate_patch(patch: str, repro_test: str, workdir: str = ".", test_dir: st
     with tempfile.TemporaryDirectory(prefix="bugsmith-") as tmp:
         root = Path(tmp) / "repo"
         shutil.copytree(repo, root, ignore=_IGNORE)
+        if config.SANDBOX_MODE == "docker":
+            subprocess.run(["chmod", "-R", "a+rX", str(Path(tmp))], check=True)  # the container user is not the host user
         wd = (root / workdir).resolve()
         if root not in wd.parents and wd != root:
             res.steps.append(Step("workdir", False, "workdir escapes repo"))
@@ -92,7 +113,7 @@ def validate_patch(patch: str, repro_test: str, workdir: str = ".", test_dir: st
         (wd / _REPRO).write_text(repro_test)
         py = [sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider"]
 
-        code, out = _run([*py, _REPRO], wd, timeout)
+        code, out = _run([*py, _REPRO], wd, timeout, root)
         res.steps.append(Step("repro_fails_before_patch", code != 0 and code != 124,
                               out if code == 0 else out[-600:]))  # if it passes pre-patch, it doesn't reproduce the bug
         if not res.steps[-1].ok:
@@ -104,13 +125,13 @@ def validate_patch(patch: str, repro_test: str, workdir: str = ".", test_dir: st
         if code != 0:
             return res
 
-        code, out = _run([*py, _REPRO], wd, timeout)
+        code, out = _run([*py, _REPRO], wd, timeout, root)
         res.steps.append(Step("repro_passes_after_patch", code == 0, out[-600:]))
         if code != 0:
             return res
 
         if test_dir:
-            code, out = _run([*py, test_dir], wd, timeout)
+            code, out = _run([*py, test_dir], wd, timeout, root)
             res.steps.append(Step("existing_tests", code == 0, out[-600:]))
             if code != 0:
                 return res

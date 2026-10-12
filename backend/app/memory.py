@@ -1,31 +1,12 @@
-"""Long-term memory (SQLite): past RCAs, their outcomes, and per-agent track record.
+"""Long-term memory: past RCAs, their outcomes, and per-agent track record (same database as the store).
 
-Short-term state lives in the ADK session (`tool_context.state`); this is what
-survives across incidents and restarts.
+Short-term state lives in the ADK session (`tool_context.state`); this is what survives across incidents and restarts.
 """
-import json
 import re
-import sqlite3
-from contextlib import closing
 
-from app import config
+import sqlalchemy as sa
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS rca_memory (
-  run_id TEXT PRIMARY KEY, issue_id TEXT, title TEXT, tokens TEXT,
-  rca TEXT, confidence REAL, outcome TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS agent_stats (
-  agent TEXT PRIMARY KEY, accepted INTEGER DEFAULT 0, rejected INTEGER DEFAULT 0
-);
-"""
-
-
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(config.DB_PATH)
-    c.row_factory = sqlite3.Row
-    c.executescript(_SCHEMA)
-    return c
+from app import db
 
 
 def tokenize(title: str) -> set[str]:
@@ -38,37 +19,42 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 
 def save_run(run_id: str, issue_id: str, title: str, rca: dict, confidence: float) -> None:
-    with closing(_conn()) as c, c:
-        c.execute("INSERT OR REPLACE INTO rca_memory(run_id,issue_id,title,tokens,rca,confidence) VALUES (?,?,?,?,?,?)",
-                  (run_id, issue_id, title, " ".join(sorted(tokenize(title))), json.dumps(rca), confidence))
+    t = db.rca_memory
+    vals = dict(issue_id=issue_id, title=title, tokens=" ".join(sorted(tokenize(title))), rca=rca, confidence=confidence)
+    with db.engine().begin() as c:
+        if c.execute(sa.select(t.c.run_id).where(t.c.run_id == run_id)).first():
+            c.execute(t.update().where(t.c.run_id == run_id).values(**vals))
+        else:
+            c.execute(t.insert().values(run_id=run_id, **vals))
 
 
 def similar(title: str, exclude_run: str = "", min_sim: float = 0.5, limit: int = 3) -> list[dict]:
     q = tokenize(title)
-    with closing(_conn()) as c:
-        rows = c.execute("SELECT * FROM rca_memory WHERE run_id != ?", (exclude_run,)).fetchall()
-    scored = [(_jaccard(q, set(r["tokens"].split())), r) for r in rows]
-    out = [{"similarity": round(s, 2), "issue_id": r["issue_id"], "title": r["title"], "outcome": r["outcome"] or "unreviewed",
-            "confidence": r["confidence"], "summary": json.loads(r["rca"]).get("summary"),
-            "faulty_file": json.loads(r["rca"]).get("faulty_file"), "suggested_fix": json.loads(r["rca"]).get("suggested_fix")}
-           for s, r in sorted(scored, key=lambda x: -x[0]) if s >= min_sim]
-    return out[:limit]
+    with db.engine().connect() as c:
+        rows = c.execute(sa.select(db.rca_memory).where(db.rca_memory.c.run_id != exclude_run)).fetchall()
+    scored = sorted(((_jaccard(q, set((r.tokens or "").split())), r) for r in rows), key=lambda x: -x[0])
+    return [{"similarity": round(s, 2), "issue_id": r.issue_id, "title": r.title, "outcome": r.outcome or "unreviewed",
+             "confidence": r.confidence, "summary": r.rca.get("summary"), "faulty_file": r.rca.get("faulty_file"),
+             "suggested_fix": r.rca.get("suggested_fix")} for s, r in scored if s >= min_sim][:limit]
 
 
 def record_feedback(run_id: str, accepted: bool, agents: list[str]) -> bool:
-    with closing(_conn()) as c, c:
-        cur = c.execute("UPDATE rca_memory SET outcome=? WHERE run_id=?", ("accepted" if accepted else "rejected", run_id))
-        if cur.rowcount == 0:
+    col = "accepted" if accepted else "rejected"
+    with db.engine().begin() as c:
+        n = c.execute(db.rca_memory.update().where(db.rca_memory.c.run_id == run_id).values(outcome=col)).rowcount
+        if n == 0:
             return False
-        col = "accepted" if accepted else "rejected"
         for a in agents:
-            c.execute(f"INSERT INTO agent_stats(agent,{col}) VALUES (?,1) ON CONFLICT(agent) DO UPDATE SET {col}={col}+1", (a,))
+            if c.execute(sa.select(db.agent_stats.c.agent).where(db.agent_stats.c.agent == a)).first():
+                c.execute(db.agent_stats.update().where(db.agent_stats.c.agent == a).values({col: db.agent_stats.c[col] + 1}))
+            else:
+                c.execute(db.agent_stats.insert().values(agent=a, accepted=int(accepted), rejected=int(not accepted)))
     return True
 
 
 def reliability(agent: str) -> float:
     """Smoothed historical acceptance rate in [0,1]; 0.5 with no history."""
-    with closing(_conn()) as c:
-        r = c.execute("SELECT accepted, rejected FROM agent_stats WHERE agent=?", (agent,)).fetchone()
-    a, b = (r["accepted"], r["rejected"]) if r else (0, 0)
+    with db.engine().connect() as c:
+        r = c.execute(sa.select(db.agent_stats).where(db.agent_stats.c.agent == agent)).first()
+    a, b = (r.accepted, r.rejected) if r else (0, 0)
     return (a + 1) / (a + b + 2)

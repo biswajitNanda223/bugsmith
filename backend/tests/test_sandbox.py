@@ -55,3 +55,49 @@ async def test_mcp_roundtrip(repo, monkeypatch):
         assert "validate_patch" in [t.name for t in (await session.list_tools()).tools]
         out = await session.call_tool("validate_patch", {"patch": GOOD_PATCH, "repro_test": REPRO, "workdir": "demo-app"})
         assert json.loads(out.content[0].text)["passed"] is True
+
+
+def test_docker_command_is_locked_down(tmp_path):
+    root = tmp_path / "repo"
+    wd = root / "demo-app"
+    cmd = sandbox.docker_command([sys.executable, "-m", "pytest", "-q"], root, wd, "bugsmith-x", "img")
+    joined = " ".join(cmd)
+    assert cmd[:3] == ["docker", "run", "--rm"] and cmd[-5:] == ["img", "python", "-m", "pytest", "-q"]
+    assert "--network none" in joined and "--read-only" in joined and "--cap-drop ALL" in joined
+    assert "no-new-privileges" in joined and "--user 10001:10001" in joined and "--pids-limit" in joined
+    assert f"-v {root}:/work:ro" in joined and "-w /work/demo-app" in joined
+    assert str(sys.executable) not in cmd  # host interpreter path never leaks into the container
+
+
+def test_docker_mode_runs_tests_in_container_not_host(monkeypatch, tmp_path):
+    from app import config
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append((argv, kw.get("env")))
+        import subprocess
+        return subprocess.CompletedProcess(argv, 1, stdout="1 failed", stderr="")  # repro "fails before patch"
+
+    monkeypatch.setattr(config, "SANDBOX_MODE", "docker")
+    monkeypatch.setattr(sandbox.subprocess, "run", fake_run)
+    sandbox_repo = tmp_path / "r"
+    (sandbox_repo / "demo-app").mkdir(parents=True)
+    r = sandbox.validate_patch("--- a/x\n+++ b/x\n", "def test_x(): pass", "demo-app", repo=sandbox_repo)
+    pytest_calls = [c for c in calls if c[0][:2] == ["docker", "run"]]
+    assert pytest_calls and pytest_calls[0][1] is None  # no host env passed through
+    assert r.steps[0].name == "repro_fails_before_patch"
+
+
+def _docker_available():
+    import shutil, subprocess
+    return shutil.which("docker") and subprocess.run(["docker", "image", "inspect", "bugsmith-sandbox"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _docker_available(), reason="needs a Docker daemon and the bugsmith-sandbox image (mise run sandbox:build)")
+def test_docker_end_to_end(monkeypatch, repo):
+    from app import config
+    monkeypatch.setattr(config, "SANDBOX_MODE", "docker")
+    r = sandbox.validate_patch(GOOD_PATCH, REPRO, "demo-app", repo=repo)
+    assert r.passed, r.to_dict()
+    net = sandbox.validate_patch(GOOD_PATCH, "import socket\ndef test_net():\n    socket.create_connection(('1.1.1.1', 53), 2)\n", "demo-app", repo=repo)
+    assert net.passed is False  # repro must fail before the patch; with no network it fails by design, never reaching the internet
