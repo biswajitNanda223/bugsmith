@@ -14,6 +14,7 @@ mise run dev                              # API :8000 + UI :5173
 mise run test                             # no API key needed (fake LLM)
 ```
 Open http://localhost:5173, **Add incident** (`DEMO-1`), **Investigate**.
+API docs (auto-generated): Swagger UI http://localhost:8000/docs · ReDoc http://localhost:8000/redoc · spec http://localhost:8000/openapi.json
 
 | Task | What |
 |---|---|

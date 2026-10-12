@@ -5,9 +5,10 @@ import hmac
 import json
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from app import config, service
+from app.schemas import Detail, WebhookResult
 from app.store import store
 
 router = APIRouter()
@@ -52,15 +53,26 @@ def normalize(resource: str, payload: dict) -> dict | None:
     return report
 
 
-@router.post("/webhooks/sentry")
-async def sentry_webhook(request: Request):
+@router.post("/webhooks/sentry", tags=["webhooks"], summary="Receive a Sentry alert", response_model=WebhookResult,
+             responses={401: {"model": Detail, "description": "Bad or missing signature"},
+                        400: {"model": Detail, "description": "Invalid JSON"},
+                        503: {"model": Detail, "description": "SENTRY_WEBHOOK_SECRET not configured"}},
+             description="Configure as the webhook URL of a Sentry internal integration (issue alert / `issue.created`). "
+                         "The body is verified with HMAC-SHA256 using the integration's client secret. A repeated `Request-ID` is a "
+                         "retry and is ignored; a repeat of a known crash only increments its occurrence count. With "
+                         "`BUGSMITH_AUTO_RUN=1` a new crash also starts an investigation, subject to a cooldown and an hourly cap.")
+async def sentry_webhook(
+        request: Request,
+        sentry_hook_signature: str | None = Header(None, alias="Sentry-Hook-Signature", description="Hex HMAC-SHA256 of the raw body"),
+        sentry_hook_resource: str | None = Header(None, alias="Sentry-Hook-Resource", description="`event_alert` or `issue`"),
+        request_id: str | None = Header(None, alias="Request-ID", description="Delivery id, used for idempotency")):
     if not config.SENTRY_WEBHOOK_SECRET:
         raise HTTPException(503, "SENTRY_WEBHOOK_SECRET is not configured; refusing unsigned webhooks")
     body = await request.body()
-    if not verify_signature(body, request.headers.get("sentry-hook-signature", ""), config.SENTRY_WEBHOOK_SECRET):
+    if not verify_signature(body, sentry_hook_signature or "", config.SENTRY_WEBHOOK_SECRET):
         raise HTTPException(401, "bad signature")
 
-    delivery = request.headers.get("request-id") or hashlib.sha256(body).hexdigest()
+    delivery = request_id or hashlib.sha256(body).hexdigest()
     if not store.claim_delivery(f"sentry:{delivery}"):
         return {"status": "duplicate_delivery"}
 
@@ -68,7 +80,7 @@ async def sentry_webhook(request: Request):
         payload = json.loads(body)
     except ValueError:
         raise HTTPException(400, "invalid JSON")
-    report = normalize(request.headers.get("sentry-hook-resource", ""), payload)
+    report = normalize(sentry_hook_resource or "", payload)
     if report is None:
         return {"status": "ignored"}
 
