@@ -6,6 +6,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from app import confidence, memory
 from app.agents.rca import build_rca_pipeline
 from app.store import store
 
@@ -30,9 +31,17 @@ async def run_incident(run_id: str, issue_id: str, agent=None) -> None:
                                                    "name": part.function_response.name})
                 elif part.text and ev.is_final_response():
                     await store.add_event(run_id, {"agent": ev.author, "type": "message", "text": part.text})
-        final = (await sessions.get_session(app_name=APP_NAME, user_id="bugsmith", session_id=session.id)).state.get("rca")
+        state = (await sessions.get_session(app_name=APP_NAME, user_id="bugsmith", session_id=session.id)).state
+        final = state.get("rca")
         if isinstance(final, str):
             final = json.loads(final)
+        if final:
+            final["confidence_breakdown"] = confidence.aggregate(
+                state.get("investigator_report") or {}, final, state.get("similar_past") or [])
+            await store.add_event(run_id, {"agent": "Confidence", "type": "confidence", **final["confidence_breakdown"]})
+            run = store.runs[run_id]
+            memory.save_run(run_id, issue_id, store.incidents[run["incident_id"]]["title"], final,
+                            final["confidence_breakdown"]["final"])
         await store.finish(run_id, "done", rca=final)
     except Exception as e:  # surface failures in the UI instead of dying silently
         log.exception("run %s failed", run_id)

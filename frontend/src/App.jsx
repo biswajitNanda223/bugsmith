@@ -2,18 +2,47 @@ import { useEffect, useRef, useState } from "react";
 
 const api = (path, opts) => fetch(`/api${path}`, opts).then((r) => r.json());
 
-function Rca({ rca }) {
+const pct = (x) => `${Math.round(x * 100)}%`;
+const ACTIONS = { auto_pr_allowed: "Auto-PR allowed", rca_only: "RCA only — review before fixing", needs_human: "Needs a human" };
+
+function Confidence({ b }) {
+  return (
+    <div className="conf">
+      <div className="bar"><div style={{ width: pct(b.final) }} /></div>
+      <strong>{pct(b.final)}</strong> <span className="muted">· {ACTIONS[b.action]}</span>
+      <ul className="muted small">
+        {Object.entries(b.agents).map(([a, v]) => <li key={a}>{a}: {pct(v)} (track record {pct(b.reliability[a])})</li>)}
+        <li>Evidence factor ×{b.evidence_factor}</li>
+        <li>Memory: {b.similar_incidents} similar past incident(s), adjustment {b.memory_delta >= 0 ? "+" : ""}{pct(b.memory_delta)}</li>
+      </ul>
+    </div>
+  );
+}
+
+function Feedback({ run }) {
+  const [sent, setSent] = useState(null);
+  const send = async (accepted) => {
+    const r = await fetch(`/api/runs/${run}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accepted }) });
+    if (r.ok) setSent(accepted ? "accepted" : "rejected");
+  };
+  if (sent) return <p className="muted">Marked {sent}. BugSmith will remember this.</p>;
+  return <div className="row"><button onClick={() => send(true)}>👍 Correct</button><button className="alt" onClick={() => send(false)}>👎 Wrong</button></div>;
+}
+
+function Rca({ rca, run }) {
   return (
     <section className="card">
       <h3>Root cause</h3>
+      {rca.confidence_breakdown && <Confidence b={rca.confidence_breakdown} />}
       <p><strong>{rca.summary}</strong></p>
-      <p className="muted">{rca.faulty_file}:{rca.faulty_lines} · confidence {Math.round(rca.confidence * 100)}%</p>
+      <p className="muted">{rca.faulty_file}:{rca.faulty_lines}</p>
       <p>{rca.hypothesis}</p>
       <h4>Evidence</h4>
       <ul>{rca.evidence.map((e, i) => <li key={i}>{e}</li>)}</ul>
       {rca.missing_info?.length > 0 && (<><h4>Missing info</h4><ul>{rca.missing_info.map((e, i) => <li key={i}>{e}</li>)}</ul></>)}
       <h4>Suggested fix</h4>
       <p>{rca.suggested_fix}</p>
+      <Feedback run={run} />
     </section>
   );
 }
@@ -42,6 +71,7 @@ function RunView({ run }) {
               <span className="agent">{s.agent}</span>{" "}
               {s.type === "tool_call" && <>called <code>{s.name}</code> <span className="muted">{JSON.stringify(s.args)}</span></>}
               {s.type === "tool_result" && <>got result from <code>{s.name}</code></>}
+              {s.type === "confidence" && <>final confidence <strong>{pct(s.final)}</strong></>}
               {s.type === "message" && <span className="muted">{s.text.slice(0, 200)}</span>}
             </li>
           ))}
@@ -49,7 +79,7 @@ function RunView({ run }) {
         </ol>
       </section>
       {result?.error && <section className="card error">Run failed: {result.error}</section>}
-      {result?.rca && <Rca rca={result.rca} />}
+      {result?.rca && <Rca rca={result.rca} run={run} />}
     </div>
   );
 }

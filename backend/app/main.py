@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from app import memory
 from app.runner import run_incident
 from app.store import store
 
@@ -57,6 +58,21 @@ def get_run(run_id: str):
     if run_id not in store.runs:
         raise HTTPException(404, "run not found")
     return store.runs[run_id]
+
+
+class FeedbackIn(BaseModel):
+    accepted: bool
+
+
+@app.post("/api/runs/{run_id}/feedback")
+def feedback(run_id: str, body: FeedbackIn):
+    """Engineer verdict on the RCA. Updates long-term memory and per-agent reliability."""
+    if run_id not in store.runs:
+        raise HTTPException(404, "run not found")
+    if not memory.record_feedback(run_id, body.accepted, ["Investigator", "RcaWriter"]):
+        raise HTTPException(409, "run has no saved RCA")
+    store.runs[run_id]["feedback"] = "accepted" if body.accepted else "rejected"
+    return {"ok": True}
 
 
 @app.get("/api/runs/{run_id}/stream")

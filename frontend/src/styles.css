@@ -16,3 +16,6 @@ button { padding:6px 12px; border:0; border-radius:6px; background:var(--accent)
 .badge.rca_ready { color:#1a7f37; } .badge.failed { color:var(--err); } .badge.investigating { color:var(--accent); }
 .timeline { padding-left:20px; } .agent { font-weight:600; }
 code { background:var(--bg); padding:1px 5px; border-radius:4px; }
+.small { font-size:13px; } .alt { background:var(--muted); }
+.bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:4px 0; max-width:320px; }
+.bar > div { height:100%; background:var(--accent); }

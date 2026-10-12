@@ -8,3 +8,5 @@ FIXTURES_DIR = BACKEND_DIR / "fixtures"
 SENTRY_MCP_URL = os.getenv("SENTRY_MCP_URL", "")
 GITHUB_MCP_URL = os.getenv("GITHUB_MCP_URL", "")
 GITHUB_MCP_TOKEN = os.getenv("GITHUB_MCP_TOKEN", "")
+
+DB_PATH = os.getenv("BUGSMITH_DB", str(BACKEND_DIR / "bugsmith.db"))

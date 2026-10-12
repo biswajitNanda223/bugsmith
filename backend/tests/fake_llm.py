@@ -15,6 +15,9 @@ RCA_JSON = {
 }
 
 
+FINDINGS_CONFIDENCE = 0.8
+
+
 class FakeLlm(BaseLlm):
     model: str = "fake"
 
@@ -23,8 +26,16 @@ class FakeLlm(BaseLlm):
         last = contents[-1].parts if contents and contents[-1].parts else []
         if llm_request.config.response_schema is not None:
             yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(RCA_JSON))]))
-        elif any(p.function_response for p in last):
-            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="Crash at app.py:19 (discount None).")]))
         else:
-            fc = types.FunctionCall(name="get_crash_report", args={"issue_id": "DEMO-1"})
-            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=fc)]))
+            done = sum(1 for c in contents for p in (c.parts or []) if p.function_response)
+            script = [
+                ("recall_similar_incidents", {"title": "TypeError: NoneType in cart_total"}),
+                ("get_crash_report", {"issue_id": "DEMO-1"}),
+                ("submit_findings", {"summary": "cart_total subtracts None", "evidence": ["app.py:19", "c2 discount None"],
+                                     "confidence": FINDINGS_CONFIDENCE}),
+            ]
+            if done < len(script):
+                name, args = script[done]
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(name=name, args=args))]))
+            else:
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="Crash at app.py:19 (discount None).")]))

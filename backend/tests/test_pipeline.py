@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,3 +37,31 @@ def test_local_tools_confined():
     from app.tools import local
     assert "error" in local.read_file("../../etc/passwd")
     assert local.search_code("def cart_total")["matches"]
+
+
+@pytest.mark.asyncio
+async def test_confidence_and_memory_loop():
+    from app import memory
+
+    async def go():
+        inc = store.create_incident(f"MEM-{uuid.uuid4().hex[:6]}", "TypeError: NoneType in cart_total")
+        run = store.create_run(inc["id"])
+        await runner.run_incident(run["id"], "DEMO-1", agent=build_rca_pipeline(model=FakeLlm()))
+        return run["id"], store.runs[run["id"]]
+
+    rid1, r1 = await go()
+    b1 = r1["rca"]["confidence_breakdown"]
+    assert b1["agents"] == {"Investigator": 0.8, "RcaWriter": 0.9}
+    assert b1["final"] == 0.8 and b1["similar_incidents"] == 0  # min(0.8,0.9) * 1 evidence * neutral reliability
+    assert any(e["type"] == "confidence" for e in r1["events"])
+
+    memory.record_feedback(rid1, accepted=True, agents=["Investigator", "RcaWriter"])
+    assert memory.reliability("Investigator") > 0.5
+
+    _, r2 = await go()
+    b2 = r2["rca"]["confidence_breakdown"]
+    assert b2["similar_incidents"] == 1 and b2["memory_delta"] > 0 and b2["final"] > b1["final"]
+
+    memory.record_feedback(r2["id"], accepted=False, agents=["Investigator", "RcaWriter"])
+    _, r3 = await go()
+    assert r3["rca"]["confidence_breakdown"]["memory_delta"] < b2["memory_delta"]
