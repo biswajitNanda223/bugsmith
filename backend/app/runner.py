@@ -1,0 +1,39 @@
+"""Runs an ADK pipeline for one incident and records each event in the store."""
+import json
+import logging
+
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+
+from app.agents.rca import build_rca_pipeline
+from app.store import store
+
+log = logging.getLogger("bugsmith.runner")
+APP_NAME = "bugsmith"
+
+
+async def run_incident(run_id: str, issue_id: str, agent=None) -> None:
+    agent = agent or build_rca_pipeline()
+    sessions = InMemorySessionService()
+    runner = Runner(agent=agent, app_name=APP_NAME, session_service=sessions)
+    session = await sessions.create_session(app_name=APP_NAME, user_id="bugsmith", state={"issue_id": issue_id})
+    msg = types.Content(role="user", parts=[types.Part(text=f"Investigate crash {issue_id}.")])
+    try:
+        async for ev in runner.run_async(user_id="bugsmith", session_id=session.id, new_message=msg):
+            for part in (ev.content.parts if ev.content and ev.content.parts else []):
+                if part.function_call:
+                    await store.add_event(run_id, {"agent": ev.author, "type": "tool_call",
+                                                   "name": part.function_call.name, "args": dict(part.function_call.args or {})})
+                elif part.function_response:
+                    await store.add_event(run_id, {"agent": ev.author, "type": "tool_result",
+                                                   "name": part.function_response.name})
+                elif part.text and ev.is_final_response():
+                    await store.add_event(run_id, {"agent": ev.author, "type": "message", "text": part.text})
+        final = (await sessions.get_session(app_name=APP_NAME, user_id="bugsmith", session_id=session.id)).state.get("rca")
+        if isinstance(final, str):
+            final = json.loads(final)
+        await store.finish(run_id, "done", rca=final)
+    except Exception as e:  # surface failures in the UI instead of dying silently
+        log.exception("run %s failed", run_id)
+        await store.finish(run_id, "failed", error=f"{type(e).__name__}: {e}")

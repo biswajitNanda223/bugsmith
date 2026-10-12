@@ -1,0 +1,14 @@
+{
+  "id": "DEMO-1",
+  "title": "TypeError: unsupported operand type(s) for -: 'int' and 'NoneType'",
+  "service": "demo-shop",
+  "release": "2026.10.11-1",
+  "first_seen": "2026-10-12T09:14:00Z",
+  "events": 214,
+  "users_affected": 37,
+  "request": "GET /cart/c2/total",
+  "stacktrace": [
+    {"file": "demo-app/app.py", "function": "get_total", "line": 24},
+    {"file": "demo-app/app.py", "function": "cart_total", "line": 19, "context": "total += item[\"price\"] * item[\"qty\"] * (1 - item[\"discount\"])"}
+  ]
+}
